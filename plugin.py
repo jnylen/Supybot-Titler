@@ -515,7 +515,7 @@ class Titler(callbacks.Plugin):
                 title = self._cleantitle(soup.title.string)
                 # should we also fetch description? We have specific things to NOT fetch.
                 # bad extensions.
-                badexts = ['.jpg', '.jpeg', '.gif', '.png']
+                badexts = ['.jpg', '.jpeg', '.gif', '.png', '.iso', '.exe']
                 if __builtins__['any'](url.endswith(x) for x in badexts):
                     gd = False
                 else:
