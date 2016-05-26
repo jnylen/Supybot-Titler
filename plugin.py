@@ -107,9 +107,9 @@ class Titler(callbacks.Plugin):
         self.encoding = 'utf8'  # irc output.
         self.headers = {'User-agent': 'Mozilla/5.0 (Windows NT 6.1; rv:15.0) Gecko/20120716 Firefox/15.0a2'}
         # longurl stuff
-        self.longUrlCacheTime = time.time()
-        self.longUrlServices = None
-        self._getlongurlservices()  # initial fetch.
+        # self.longUrlCacheTime = time.time()
+        # self.longUrlServices = None
+        # self._getlongurlservices()  # initial fetch.
         # bitly.
         self.bitlylogin = self.registryValue('bitlyLogin')
         self.bitlyapikey = self.registryValue('bitlyApiKey')
@@ -339,46 +339,46 @@ class Titler(callbacks.Plugin):
     #
     #longurlservices = wrap(longurlservices)
 
-    def _getlongurlservices(self):
-        """Function to maintain list of shorturl services for resolving with cache."""
-
-        if self.longUrlServices and abs(time.time()-self.longUrlCacheTime) < 86400:
-            self.log.info("longurlservices: Just returning..")
-            # we have services and they're within the cache period.
-            return self.longUrlServices
-        else:
-            self.log.info("longurlservices: Fetching longurl services.")
-            url = 'http://api.longurl.org/v2/services?format=json'
-            lookup = self._openurl(url)
-            if not lookup:
-                self.log.error("longurlservices: could not fetch URL: {0}".format(url))
-                return None
-            # we did get a url. lets process.
-            try:
-                services = json.loads(lookup)
-                domains = [item for item in services]
-                self.longUrlCacheTime = time.time()
-                self.longUrlServices = domains
-                return domains
-            except Exception, e:
-                self.log.error("longurlservices: ERROR processing JSON in longurl services: {0}".format(e))
-                return None
-
-    def _longurl(self, surl):
-        """Resolve shortened urls into their long form."""
-
-        url = 'http://api.longurl.org/v2/expand?format=json&url=%s' % surl
-        lookup = self._openurl(url)
-        if not lookup:
-            self.log.error("_longurl: could not fetch: {0}".format(url))
-            return None
-        # we have a url, proceed with processing json.
-        try:
-            lookup = json.loads(lookup)
-            return lookup['long-url']
-        except Exception, e:
-            self.log.error("_longurl: json processing error: {0}".format(e))
-            return None
+#    def _getlongurlservices(self):
+#        """Function to maintain list of shorturl services for resolving with cache."""
+#
+#        if self.longUrlServices and abs(time.time()-self.longUrlCacheTime) < 86400:
+#            self.log.info("longurlservices: Just returning..")
+#            # we have services and they're within the cache period.
+#            return self.longUrlServices
+#        else:
+#            self.log.info("longurlservices: Fetching longurl services.")
+#            url = 'http://api.longurl.org/v2/services?format=json'
+#            lookup = self._openurl(url)
+#            if not lookup:
+#                self.log.error("longurlservices: could not fetch URL: {0}".format(url))
+#                return None
+#            # we did get a url. lets process.
+#            try:
+#                services = json.loads(lookup)
+#                domains = [item for item in services]
+#                self.longUrlCacheTime = time.time()
+#                self.longUrlServices = domains
+#                return domains
+#            except Exception, e:
+#                self.log.error("longurlservices: ERROR processing JSON in longurl services: {0}".format(e))
+#                return None
+#
+#    def _longurl(self, surl):
+#        """Resolve shortened urls into their long form."""
+#
+#        url = 'http://api.longurl.org/v2/expand?format=json&url=%s' % surl
+#        lookup = self._openurl(url)
+#        if not lookup:
+#            self.log.error("_longurl: could not fetch: {0}".format(url))
+#            return None
+#        # we have a url, proceed with processing json.
+#        try:
+#            lookup = json.loads(lookup)
+#            return lookup['long-url']
+#        except Exception, e:
+#            self.log.error("_longurl: json processing error: {0}".format(e))
+#            return None
 
     ####################
     # BITLY SHORTENING #
@@ -585,10 +585,10 @@ class Titler(callbacks.Plugin):
         # before we do anything, if a "shortened" link is pasted, we have to "expand" (or try) it.
         domain = urlparse(url).hostname  # parse out domain.
         # first, check if our link is inside a shortener. fetch real url.
-        if domain in self.longUrlServices:
-            expandedurl = self._longurl(url)  # try to expand it back to normal.
-            if expandedurl:  # we got the expanded url back.
-                url = expandedurl  # use the realurl.
+        # if domain in self.longUrlServices:
+        #     expandedurl = self._longurl(url)  # try to expand it back to normal.
+        #     if expandedurl:  # we got the expanded url back.
+        #         url = expandedurl  # use the realurl.
         # we always want the title. gd will be handled separately.
         if displayDesc:  # this will return a dict vs a string. we need to handle this properly below.
             title = self._titledirector(url, gd=True, di=displayImages)
