@@ -119,13 +119,13 @@ class Titler(callbacks.Plugin):
         self.domainparsers = {
             'vimeo.com': '_vimeotitle',
             'player.vimeo.com': '_vimeotitle',
-            'm.youtube.com': '_yttitle',
-            'www.youtube.com': '_yttitle',
-            'youtube.com': '_yttitle',
-            'youtu.be': '_yttitle',
+            #'m.youtube.com': '_yttitle',
+            #'www.youtube.com': '_yttitle',
+            #'youtube.com': '_yttitle',
+            #'youtu.be': '_yttitle',
             #'i.imgur.com': '_imgur',
             #'imgur.com': '_imgur',
-            'gist.github.com': '_gist',
+            #'gist.github.com': '_gist',
             'www.dailymotion.com': '_dmtitle',
             'dailymotion.com': '_dmtitle',
             'www.blip.tv': '_bliptitle',
@@ -185,7 +185,7 @@ class Titler(callbacks.Plugin):
         # big try except block and error handling for each.
         self.log.info("_openurl: Trying to open: {0}".format(url))
         try:
-            response = requests.get(url, headers=h, timeout=5)
+            response = requests.get(url, headers=h, timeout=5, allow_redirects=True)
             # should we just return text or the actual object.
             if urlread:
                 return response.text
@@ -671,6 +671,13 @@ class Titler(callbacks.Plugin):
                 text = ircmsgs.unAction(msg)
             else:
                 text = msg.args[1]
+
+            # NSFW search
+            if re.search("nsfw", text, re.IGNORECASE):
+                nsfw = self._red("^ NSFW ")
+            else:
+                nsfw = ""
+
             # find all urls pasted.
             #urlpattern = """(((http|ftp|https|ftps|sftp)://)|(www\.))+(([a-zA-Z
             #                0-9\._-]+\.[a-zA-Z]{2,6})|([0-9]{1,3}\.[0-9]{1,3}\.
@@ -691,12 +698,14 @@ class Titler(callbacks.Plugin):
                     if isinstance(output, dict):  # came back a dict.
                         # output.
                         if 'desc' in output and 'title' in output and output['desc'] is not None and output['title'] is not None:
-                            irc.sendMsg(ircmsgs.privmsg(channel, "{0}".format(output['title'])))
-                            irc.sendMsg(ircmsgs.privmsg(channel, "{0}".format(output['desc'])))
+                            irc.sendMsg(ircmsgs.privmsg(channel, nsfw + self._bold("[title]") + " {0}".format(output['title'])))
+                            irc.sendMsg(ircmsgs.privmsg(channel, nsfw + self._bold("[title]") + " {0}".format(output['desc'])))
                         elif 'title' in output and output['title'] is not None:
-                            irc.sendMsg(ircmsgs.privmsg(channel, "{0}".format(output['title'])))
+                            irc.sendMsg(ircmsgs.privmsg(channel, nsfw + self._bold("[title]") + " {0}".format(output['title'])))
                     else:  # no desc.
-                        irc.sendMsg(ircmsgs.privmsg(channel, "{0}".format(output)))
+                        #irc.sendMsg(ircmsgs.privmsg(channel, "{0} {1}"., format(output)))
+                        irc.sendMsg(ircmsgs.privmsg(channel, nsfw + self._bold("[title]") + " {0}".format(output)))
+
 
     #####################################################
     # PUBLIC/PRIVATE TRIGGER, MAINLY USED FOR DEBUGGING #
@@ -726,7 +735,7 @@ class Titler(callbacks.Plugin):
                     if 'desc' in output:
                         irc.reply("GD: {0}".format(output['desc']))
             else:
-                irc.reply("Response: {0}".format(output))
+             	irc.reply("Response: {0}".format(output))
 
     titler = wrap(titler, [('text')])
 
