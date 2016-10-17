@@ -822,7 +822,8 @@ class Titler(callbacks.Plugin):
                     desc = data['data']['public_description']  # str.
                     subs = self._numfmt(data['data']['subscribers'])  # int.
                     created = data['data']['created_utc']
-                    o = "subreddit: {0} - {1} - subscribers: {2} - created: {3}".format(title, desc, subs, created)
+                    created2 = self.__get_age_str(datetime.fromtimestamp(created))
+                    o = "subreddit: {0} - {1} - subscribers: {2} - created: {3}".format(title, desc, subs, created2)
                     return o
                 except Exception, e:  # something broke.
                     self.log.error("_reddit: could not process JSON from API URL: {0} :: {1}".format(apiurl, e))
