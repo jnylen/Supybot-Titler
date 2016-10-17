@@ -20,6 +20,12 @@ from cStringIO import StringIO  # images.
 # extra supybot libs
 import supybot.ircmsgs as ircmsgs
 import supybot.conf as conf
+
+from datetime import datetime, timedelta
+from dateutil.tz import tzutc
+from dateutil.parser import parse as parse_datetime
+import time
+
 # supybot libs
 import supybot.utils as utils
 from supybot.commands import *
@@ -105,7 +111,7 @@ class Titler(callbacks.Plugin):
         self.__parent = super(Titler, self)
         self.__parent.__init__(irc)
         self.encoding = 'utf8'  # irc output.
-        self.headers = {'User-agent': 'Mozilla/5.0 (Windows NT 6.1; rv:15.0) Gecko/20120716 Firefox/15.0a2'}
+        self.headers = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.84 Safari/537.36'}
         # longurl stuff
         # self.longUrlCacheTime = time.time()
         # self.longUrlServices = None
@@ -117,22 +123,25 @@ class Titler(callbacks.Plugin):
         # displayLinkTitles displayImageTitles displayOtherTitles displayShortURL
         # DOMAIN-SPECIFIC PARSING. FORMAT IS: DOMAIN: FUNCTION
         self.domainparsers = {
-            'vimeo.com': '_vimeotitle',
+            'vimeo.com': '_vimeotitle', # Vimeo
             'player.vimeo.com': '_vimeotitle',
-            'm.youtube.com': '_yttitle',
+            'm.youtube.com': '_yttitle', # YouTube
             'www.youtube.com': '_yttitle',
             'youtube.com': '_yttitle',
             'youtu.be': '_yttitle',
-            #'i.imgur.com': '_imgur',
-            #'imgur.com': '_imgur',
-            'gist.github.com': '_gist',
-            'www.dailymotion.com': '_dmtitle',
+            'www.dailymotion.com': '_dmtitle', # Dailymotion
             'dailymotion.com': '_dmtitle',
-            'www.blip.tv': '_bliptitle',
-            'blip.tv': '_bliptitle',
-            'vine.co': '_vinetitle',
-            'reddit.com': '_reddit',
-            'www.reddit.com': '_reddit'
+            #'www.blip.tv': '_bliptitle',
+            #'blip.tv': '_bliptitle',
+            #'vine.co': '_vinetitle',
+            'reddit.com': '_reddit', # Reddit
+            'www.reddit.com': '_reddit',
+            'myanimelist.net': '_mal', # My Anime List
+            'www.myanimelist.net': '_mal',
+            'instagram.com': '_instagram', # instagram
+            'www.instagram.com': '_instagram',
+            'open.spotify.com': '_spotify', # Spotify
+            'play.spotify.com': '_spotify'
             }
 
     def die(self):
@@ -141,6 +150,45 @@ class Titler(callbacks.Plugin):
     ##############
     # FORMATTING #
     ##############
+
+    def __get_age_str(self, published, use_fresh=True):
+        now = datetime.now(tz=published.tzinfo)
+
+        # Check if the publish date is in the future (upcoming episode)
+        if published > now:
+            age = published - now
+            future = True
+        else:
+            age = now - published
+            future = False
+
+        secs = age.total_seconds()
+
+        halfyears, days, hours, minutes = age.days // 182, age.days % 365, secs // 3600, secs // 60 % 60
+
+        agestr = []
+        years = halfyears * 0.5
+
+        # uploaded TODAY, whoa.
+        if years == 0 and days == 0 and use_fresh:
+            return 'FRESH'
+
+        if years >= 1:
+            agestr.append("%gy" % years)
+        # don't display days for videos older than 6 months
+        if years < 1 and days > 0:
+            agestr.append("%dd" % days)
+
+        if not agestr:
+            agestr.append('%dh' % hours)
+
+        if not agestr:
+            agestr.append('%dm' % minutes)
+
+        if agestr:
+            agestr.append(" from now" if future else " ago")
+
+        return "".join(agestr)
 
     def _red(self, string):
         """Returns a red string."""
@@ -174,20 +222,32 @@ class Titler(callbacks.Plugin):
     # HTTP HELPER FUNCTIONS #
     #########################
 
-    def _openurl(self, url, urlread=True, headers=None):
+    def _openurl(self, url, urlread=True, headers=None, useragent=None):
         """Generic http fetcher we can use here."""
+
+        # Replace default useragent
+        if useragent:
+            self.headers = {'User-agent': useragent}
 
         # deal with headers first.
         h = self.headers
         # see if the user wants to add more.
         if headers:
             h = h.append(headers)
+
         # big try except block and error handling for each.
         self.log.info("_openurl: Trying to open: {0}".format(url))
         try:
-            response = requests.get(url, headers=h, timeout=5)
+            response = requests.get(url, stream=True, headers=h, timeout=5, allow_redirects=True)
+
+            #self.log.info('params: {0}'.format(vars(response.headers)))
             # should we just return text or the actual object.
-            if urlread:
+            #  and int(response.headers.get('content-length')) < 10000000
+            if response.headers['Content-Type'].startswith('video/'):
+                return response
+            elif response.headers['Content-Type'].startswith('audio/'):
+                return response
+            elif urlread:
                 return response.text
             else:
                 return response
@@ -384,31 +444,26 @@ class Titler(callbacks.Plugin):
     # BITLY SHORTENING #
     ####################
 
-    def _shortenurl(self, url):
-        """Shorten links via bit.ly."""
+    def _shortenurl(self, url, type=False):
+        """Shorten links via is.gd."""
 
         # don't reshorten bitly links.
-        if urlparse(url).hostname in ('bit.ly', 'j.mp', 'bitly.com'):
+        if urlparse(url).hostname in ('is.gd'):
             return url
-        # otherwise, try to shorten links. uses legacy v3 api.
-        bitlyurl = 'http://api.bitly.com/v3/shorten?login=%s&apiKey=%s&longUrl=%s' % (self.bitlylogin, self.bitlyapikey, url)
+        # otherwise, try to shorten links. uses api.
+        apiurl = 'https://is.gd/create.php?format=json&url=%s' % (self.urlEncodeNonAscii(url))
         # fetch our url.
-        lookup = self._openurl(bitlyurl)
+        lookup = self._openurl(apiurl)
         if not lookup:
             self.log.error("_shortenurl: could not fetch: {0}".format(url))
             return None
         # now try to parse json.
         try:
             data = json.loads(lookup)
-            if data['status_code'] == 500:  # 500 error.
-                if 'status_txt' in data:
-                    self.log.error("_shortenurl: ERROR trying to shorten {0} :: {1}".format(url, data['status_txt']))
-                    return url  # just return it back.
-                else:
-                    self.log.error("_shortenurl: ERROR trying to shorten {0} :: {1}".format(url, data))
-                    return url
-            else:  # try and get the shortened link.
-                return data['data']['url']
+            if type:
+                return data['shorturl'] + ".jpg"
+            else:
+                return data['shorturl']
         except Exception, e:
             self.log.error("_shortenurl: error parsing JSON: {0}".format(e))
             return None
@@ -452,19 +507,20 @@ class Titler(callbacks.Plugin):
         RE_REFRESH_TAG = re.compile(r'<meta[^>]+http-equiv\s*=\s*["\']*Refresh[^>]+', re.I)
         RE_REFRESH_URL = re.compile(r'url=["\']*([^\'"> ]+)', re.I)
         # now test. this can probably be improved below.
-        match = RE_REFRESH_TAG.search(content.text)
-        if match:
-            match = RE_REFRESH_URL.search(match.group(0))
+        if response.headers.get('content-type').startswith('text/'):
+            match = RE_REFRESH_TAG.search(content.text)
             if match:
-                newurl =  match.group(1)
-                # we're here if we did find a redirect.
-                response = self._openurl(newurl, urlread=False)
-                if not response:  # make sure we have a resposne.
-                    self.log.error("_fetchtitle: no response from: {0} (Redirected from: {1})".format(url, newurl))
-                    return None
-                else:  # copy the new (redirected url) back to the old url string.
-                    url = newurl
-                    content = response
+                match = RE_REFRESH_URL.search(match.group(0))
+                if match:
+                    newurl =  match.group(1)
+                    # we're here if we did find a redirect.
+                    response = self._openurl(newurl, urlread=False)
+                    if not response:  # make sure we have a resposne.
+                        self.log.error("_fetchtitle: no response from: {0} (Redirected from: {1})".format(url, newurl))
+                        return None
+                    else:  # copy the new (redirected url) back to the old url string.
+                        url = newurl
+                        content = response
         # now begin regular processing.
         # get the "charset" (encoding)
         charset = response.encoding
@@ -474,37 +530,15 @@ class Titler(callbacks.Plugin):
         contentdict['size'] = response.headers.get('content-length')
         if not contentdict['size']:  # case if we don't get length back.
             contentdict['size'] = len(content.content)
+
+        if contentdict['type'].startswith('video/'):
+            return " Video Type: {0} - Video Size: {1}".format(self._bold(contentdict['type'].replace('video/', '')), self._bold(self._sizefmt(contentdict['size'])))
+	elif contentdict['type'].startswith('audio/'):
+            return " Audio Type: {0}".format(self._bold(contentdict['type'].replace('audio/', '')))
         # now, process various types of content here. Image->text->others.
         # determine if it's an image and process. di must also be True.
-        if contentdict['type'].startswith('image/'):
-            # first, we have to check di.
-            if not di:  # should we display image titles in this context?
-                return None
-            # try/except with python images.
-            try:  # first try going from Pillow
-                from PIL import Image
-            except ImportError:  # try traditional import of old PIL
-                try:
-                    import Image
-                except ImportError:
-                    self.log.info("_fetchtitle: ERROR. I did not find PIL or Pillow installed. I cannot process images w/o this.")
-                    return None
-            # now we need cStringIO.
-            try:  # try/except because images can be corrupt.
-                im = Image.open(StringIO(content.content))
-            except Exception, e:
-                self.log.error("_fetchtitle: ERROR: {0} is an invalid image I cannot read :: {1}".format(url, e))
-                return None
-            imgformat = im.format
-            if imgformat == 'GIF':  # check to see if animated.
-                try:
-                    im.seek(1)
-                    im.seek(0)
-                    imgformat = "Animated GIF"
-                except EOFError:
-                    pass
-            # we're good. lets return the type/dimensions/size.
-            return "Image type: {0}  Dimensions: {1}x{2}  Size: {3}".format(imgformat, im.size[0], im.size[1], self._sizefmt(contentdict['size']))
+        elif contentdict['type'].startswith('image/'):
+            return " Image Type: {0} - Image Size: {1}".format(self._bold(contentdict['type'].replace('image/', '')), self._bold(self._sizefmt(contentdict['size'])))
         # if it is text, we try to just scrape the title out.
         elif contentdict['type'].startswith('text/'):
             # wrap the whole thing because who the hell knows wtf will happen.
@@ -547,8 +581,8 @@ class Titler(callbacks.Plugin):
         # handle any other filetype using libmagic.
         else:
             try:  # we could also incorporate some type of metadata attempt via exif here.
-                typeoffile = magic.from_buffer(content.content)
-                return "Content type: {0} - Size: {1}".format(typeoffile, self._sizefmt(contentdict['size']))
+                #typeoffile = magic.from_buffer(content.content)
+                return "Content type: {0} - Size: {1}".format(self._bold(contentdict['type']), self._bold(self._sizefmt(contentdict['size'])))
             except Exception, e:  # give a detailed error here in the logs.
                 self.log.error("ERROR: _fetchtitle: error trying to parse {0} via other (else) :: {1}".format(url, e))
                 self.log.error("ERROR: _fetchtitle: no handler for {0} at {1}".format(contentdict['type'], url))
@@ -671,6 +705,13 @@ class Titler(callbacks.Plugin):
                 text = ircmsgs.unAction(msg)
             else:
                 text = msg.args[1]
+
+            # NSFW search
+            if re.search("nsfw", text, re.IGNORECASE):
+                nsfw = self._red("^ NSFW ")
+            else:
+                nsfw = ""
+
             # find all urls pasted.
             #urlpattern = """(((http|ftp|https|ftps|sftp)://)|(www\.))+(([a-zA-Z
             #                0-9\._-]+\.[a-zA-Z]{2,6})|([0-9]{1,3}\.[0-9]{1,3}\.
@@ -691,12 +732,14 @@ class Titler(callbacks.Plugin):
                     if isinstance(output, dict):  # came back a dict.
                         # output.
                         if 'desc' in output and 'title' in output and output['desc'] is not None and output['title'] is not None:
-                            irc.sendMsg(ircmsgs.privmsg(channel, "{0}".format(output['title'])))
-                            irc.sendMsg(ircmsgs.privmsg(channel, "{0}".format(output['desc'])))
+                            irc.sendMsg(ircmsgs.privmsg(channel, nsfw + self._bold("[title]") + " {0}".format(output['title'])))
+                            irc.sendMsg(ircmsgs.privmsg(channel, nsfw + self._bold("[title]") + " {0}".format(output['desc'])))
                         elif 'title' in output and output['title'] is not None:
-                            irc.sendMsg(ircmsgs.privmsg(channel, "{0}".format(output['title'])))
+                            irc.sendMsg(ircmsgs.privmsg(channel, nsfw + self._bold("[title]") + " {0}".format(output['title'])))
                     else:  # no desc.
-                        irc.sendMsg(ircmsgs.privmsg(channel, "{0}".format(output)))
+                        #irc.sendMsg(ircmsgs.privmsg(channel, "{0} {1}"., format(output)))
+                        irc.sendMsg(ircmsgs.privmsg(channel, nsfw + self._bold("[title]") + " {0}".format(output)))
+
 
     #####################################################
     # PUBLIC/PRIVATE TRIGGER, MAINLY USED FOR DEBUGGING #
@@ -726,7 +769,7 @@ class Titler(callbacks.Plugin):
                     if 'desc' in output:
                         irc.reply("GD: {0}".format(output['desc']))
             else:
-                irc.reply("Response: {0}".format(output))
+             	irc.reply("Response: {0}".format(output))
 
     titler = wrap(titler, [('text')])
 
@@ -800,8 +843,9 @@ class Titler(callbacks.Plugin):
                     title = data[0]['data']['children'][0]['data']['title']
                     comments = self._numfmt(data[0]['data']['children'][0]['data']['num_comments'])
                     score = data[0]['data']['children'][0]['data']['score']
-                    created = data[0]['data']['children'][0]['data']['created_utc']
-                    o = "subreddit: {0} - {1} - comments: {2} - score: {3} - created: {4}".format(subreddit, title, comments, score, created)
+                    created  = data[0]['data']['children'][0]['data']['created_utc']
+                    created2 = self.__get_age_str(datetime.fromtimestamp(created))
+                    o = "subreddit: {0} - {1} - comments: {2} - score: {3} - created: {4}".format(subreddit, title, comments, score, created2)
                     return o
                 except Exception, e:  # something broke.
                     self.log.error("_reddit: could not process JSON from API URL: {0} :: {1}".format(apiurl, e))
@@ -821,10 +865,11 @@ class Titler(callbacks.Plugin):
             try:
                 data = json.loads(lookup)
                 created = data['data']['created_utc']  # UTC.
+                created2 = self.__get_age_str(datetime.fromtimestamp(created))
                 linkkarma = data['data']['link_karma']  # int.
                 commentkarma = data['data']['comment_karma']  # int.
                 # is_mod = data['data']['is_mod']
-                o = "reddit user: {0} KARMA: link {1}/comment {2} signed up: {3}".format(username, linkkarma, commentkarma, created)
+                o = "reddit user: {0} KARMA: link {1}/comment {2} signed up: {3}".format(username, linkkarma, commentkarma, created2)
                 return o
             except Exception, e:  # something broke.
                 self.log.error("_reddit: could not process JSON from API URL: {0} :: {1}".format(apiurl, e))
@@ -855,6 +900,35 @@ class Titler(callbacks.Plugin):
                 return None
         # now return.
         return "Vine Video: {0}".format(o)
+
+    def _instagram(self, url):
+        """Fetch information for instagram"""
+
+        apiurl = 'https://api.instagram.com/oembed/?callback=&hl=en&url=%s' % (self.urlEncodeNonAscii(url))
+        lookup = self._openurl(apiurl)
+        if not lookup:
+            self.log.error("_instagram: could not fetch API URL: {0}".format(apiurl))
+            return None
+        # process the json.
+        try:
+            data = json.loads(lookup)
+            thumbnail_url = data["thumbnail_url"]
+            html = data["html"]
+            username = data["author_name"]
+            directurl_shortened = self._shortenurl(thumbnail_url, True)
+
+            RE_DATETIME = re.compile(r'datetime=["\']*([^\' "> ]+)', re.I)
+            match = RE_DATETIME.search(html)
+
+            publish_datetime = parse_datetime(match.group(1))
+
+
+            o = "Instagram: Photo by {0} on {1} | Direct url: {2}".format(self._bold(username.encode('utf-8', 'replace')), self._bold(publish_datetime.strftime("%Y-%m-%d %H:%M %z")), directurl_shortened)
+            return o
+        except Exception, e:
+            self.log.error("_instagram: error processing JSON: {0}".format(e))
+            return None
+
 
     def _bliptitle(self, url):
         """Fetch information for blip.tv"""
@@ -924,7 +998,9 @@ class Titler(callbacks.Plugin):
             explicit = data['explicit']
             lang = data['language']
             rating = data['rating']
-            o = "DailyMotion Video: {0} Duration: {1} Explicit: {2} Lang: {3} Rating: {4}/5 Desc: {5}".format(title, dur, explicit, lang, rating, desc)
+            if rating == None:
+                rating = "-"
+            o = "DailyMotion Video: {0} | Duration: {1} | Explicit: {2} | Lang: {3} | Rating: {4}/5".format(self._bold(title), self._bold(dur), self._bold(explicit), self._bold(lang), self._bold(rating))
             return o
         except Exception, e:
             self.log.error("_dmtitle: ERROR processing JSON: {0}".format(e))
@@ -962,111 +1038,138 @@ class Titler(callbacks.Plugin):
             self.log.error("_vimeotitle: ERROR parsing JSON: {0}".format(e))
             return None
 
-    def _imgur(self, url):
-        """Try and query imgur's API for image information."""
+    def _spotify(self, url):
+        """Fetch information about tracks, artists etc from Spotify Web API."""
 
-        pathname = urlparse(url).path
-        # urls look like this:
-        # http://i.imgur.com/sAqSvpw.gif
-        # http://i.imgur.com/sAqSvpw  <single>
-        # http://imgur.com/gallery/8knRayb
-        # http://imgur.com/gallery/fcUcS <multi>
-        # how do we know if it's an album or image?
-        # make sure we have a pathname.
-        if not pathname or pathname == '':
-            self.log.error("_imgur: ERROR: could not determine pathname from: {0}".format(url))
-            return None
-        else:  # worked. remove leading /
-            pathname = pathname[1:]
-        # now, lets attempt to find our imgur id.
-        pathnamesplit = pathname.split('/')
-        splitlen = len(pathnamesplit)
-        # now check based on the splitlen.
-        if splitlen == 1:  # this means we should have the id right in here.
-            imgurid = pathnamesplit[0].split('.')[0]  # also will work if someone pastes the .gif/.jpg
-        elif splitlen == 2:  # handles gallery/8knRayb
-            imgurid = pathnamesplit[1]
-        else:
-            self.log.error("_imgur: ERROR: could not determine imgurid from: {0}".format(url))
-            return None
-        # now that we have our imgurid, lets look it up.
-        apiurl = 'http://api.imgur.com/3/album/%s' % imgurid
-        # fetch our url.
-        lookup = self._openurl(apiurl, headers=("Authorization", "Client-ID 7d8ffc64d6e9e78"))
-        if not lookup:
-            self.log.error("_imgur: could not fetch API url: {0}".format(apiurl))
-            return None
-        # now lets process the json.
-        try:
-            data = json.loads(lookup)
-            title = data['data']['title']
-            desc = data['data']['description']
-            uploaded = data['data']['datetime']  # epoch
-            views = data['data']['views']  # int
-            upvotes = data['data']['ups']  # int
-            downvotes = data['data']['downs']  # int
-            images = data['data']['images_count']  # int
-            is_album = data['data']['is_album']  # true | false
-            # now lets format the string to return.
-            o = "{0} - {1} - Views: {2} - Uploaded: {3} - Images: {4} - +{5}/-{6}".format(title, desc, views, uploaded, images, upvotes, downvotes)
-            # be cheap to add nsfw on.
-            if is_album:
-                o = "{0} - {1}".format(o, self._bu("ALBUM"))
-            # finally, return our string.
-            return o
-        except Exception, e:
-            self.log.error("_imgur: ERROR processing JSON: {0}".format(e))
-            return None
-
-    def _gist(self, url):
-        """Try and process gist information."""
-
+        # first, we have to parse the vimeo url because of how they do video ids.
         query = urlparse(url)
-        # https://api.github.com/gists/6184514
-        # https://gist.github.com/anonymous/6184514/raw/660fe8406300e5e3369ad32574f70976b3f6e042/gistfile1.txt
-        # https://gist.github.com/6184514
-        # https://gist.github.com/6184514.git
-        # https://gist.github.com/reticulatingspline/f6f457eb6df9fd6a8332
-        pathname = query.path
-        # make sure we have a pathname.
-        if not pathname or pathname == '':
-            self.log.error("_gist: ERROR: could not determine pathname from: {0}".format(url))
-            return None
-        else:  # pathname worked so lets remove the first char '/'
-            pathname = pathname[1:]
-            pathname = pathname.replace('.git', '')  # also remove ".git" if present.
-        # first, most gists are like this:
-        pathnamesplit = pathname.split('/')  # split on /
-        pathnamelen = len(pathnamesplit)  # len of such.
-        #self.log.info("URL: {0} SPLIT: {1} LEN: {2}".format(url, pathnamesplit, pathnamelen))
-        if pathnamelen == 1:
-            gistid = pathnamesplit[0]
-        elif pathnamelen == 2:  # handle reticulatingspline/f6f457eb6df9fd6a8332
-            gistid = pathnamesplit[1]  # 2nd element.
-        elif pathnamelen == 5:
-            gistid = pathnamesplit[1]  # 2nd element.
+        type = ""
+        id = ""
+
+        if query.path.startswith('/album/'):
+            id = query.path.split('/')[2]
+            type = "albums"
+        elif query.path.startswith('/track/'):
+            id = query.path.split('/')[2]
+            type = "tracks"
+        elif query.path.startswith('/artist/'):
+            id = query.path.split('/')[2]
+            type = "artists"
         else:
-            self.log.error("_gist: ERROR: could not determine gistid from: {0}".format(url))
+            self.log.error("_spotify: ERROR: could not determine id and type from: {0}".format(url))
             return None
 
-        # now that we have our gistid. lets try the api.
-        gisturl = 'https://api.github.com/gists/%s' % gistid
-        lookup = self._openurl(gisturl)
+        # now that we have our imgurid, lets look it up.
+        apiurl = 'https://api.spotify.com/v1/%s/%s' % (type, id)
+        # fetch our url.
+        lookup = self._openurl(apiurl)
         if not lookup:
-            self.log.error("_gist: could not fetch: {0}".format(url))
+            self.log.error("_spotify: could not fetch API url: {0}".format(apiurl))
+            return None
+
+        try:
+            data = json.loads(lookup)
+
+            title = ""
+
+            # For tracks and albums, add artists
+            if type in ['albums', 'tracks']:
+                artists = []
+                for artist in data['artists']:
+                    artists.append(artist['name'].encode('utf-8', 'ignore'))
+                title += ', '.join(artists)
+
+            if type == "albums":
+                title += ' - %s (Released: %s)' % (self._bold(data['name'].encode('utf-8', 'ignore')), self._bold(data['release_date']))
+            elif type == "artists":
+                title += data['name']
+                genres_n = len(data['genres'])
+                if genres_n > 0:
+                    genitive = 's' if genres_n > 1 else ''
+                    genres = data['genres'][0:4]
+                    more = ' +%s more' % genres_n - 5 if genres_n > 4 else ''
+                    title += ' (Genre%s: %s%s)' % (genitive, ', '.join(genres), more)
+            elif type == "tracks":
+                miliseconds = data['duration_ms']
+                hours, milliseconds = divmod(miliseconds, 3600000)
+                minutes, milliseconds = divmod(miliseconds, 60000)
+                seconds = float(milliseconds) / 1000
+                title += ' - %s - %s (%d:%d)' % (self._bold(data['album']['name'].encode('utf-8', 'ignore')), data['name'].encode('utf-8', 'ignore'), minutes, seconds)
+
+            return title
+        except Exception, e:
+            self.log.error("_mal: ERROR processing JSON: {0}".format(e))
+            return None
+
+    def _mal(self, url):
+        """Fetch information about anime, manga from Atarashii API."""
+
+        # first, we have to parse the vimeo url because of how they do video ids.
+        query = urlparse(url)
+        type = ""
+        id = ""
+
+        if query.path.startswith('/anime/'):
+            id = query.path.split('/')[2]
+            type = "anime"
+        elif query.path.startswith('/manga/'):
+            id = query.path.split('/')[2]
+            type = "manga"
+        else:
+            self.log.error("_mal: ERROR: could not determine id and type from: {0}".format(url))
+            return None
+
+        # now that we have our imgurid, lets look it up.
+        apiurl = 'https://api.atarashiiapp.com/2/%s/%s' % (type, id)
+        # fetch our url.
+        lookup = self._openurl(apiurl, useragent="Atarashii! (Linux; Android 1;1 Build/1)")
+        if not lookup:
+            self.log.error("_mal: could not fetch API url: {0}".format(apiurl))
             return None
         # now lets process the json.
         try:
             data = json.loads(lookup)
-            desc = data['description']  # str.
-            #public = data['public']  # false | true
-            comments = data['comments']  # int.
-            created = data['created_at']  # created_at": "2013-07-04T16:57:34Z"
-            files = [k + " (" + self._sizefmt(v['size']) + ")"  for (k, v) in data['files'].items()]
-            o = "DESC: {0} COMMENTS: {1} POSTED: {2} FILES({3}): {4}".format(desc, comments, created, len(files), " | ".join(files))
-            return o
+
+            if type == "anime":
+                title = data['title']
+                anime_type = data['type']
+                rating = data['members_score']
+                favs = data['favorited_count']
+                mem = data['members_count']
+                started = data['start_date']
+
+                try:
+                    ended = data['end_date']
+                    o = "{0} ({1}) - Rating: {2} - Favorited by {3} users - Watched by {4} users - Aired between {5} and {6}".format(title.encode('utf-8', 'replace'), self._bold(anime_type), self._bold(rating), self._bold(favs), self._bold(mem), self._bold(started), self._bold(ended))
+                except:
+                    o = "{0} ({1}) - Rating: {2} - Favorited by {3} users - Watched by {4} users - Released {5}".format(title.encode('utf-8', 'replace'), self._bold(anime_type), self._bold(rating), self._bold(favs), self._bold(mem), self._bold(started))
+
+                return o
+
+            elif type == "manga":
+                title = data['title']
+                anime_type = data['type']
+                rating = data['members_score']
+                favs = data['favorited_count']
+                mem = data['members_count']
+                status = data['status'].lower()
+
+                # Make status prettier
+                if status == "publishing":
+                    status = "still being published"
+
+                try:
+                    chapters = data['chapters']
+                    volumes = data['volumes']
+
+                    o = "{0} ({1} - {2}) - Rating: {3} - Favorited by {4} users - Read by {5} users - {6} chapters, {7} volumes".format(title, self._bold(anime_type), self._bold(status), self._bold(rating), self._bold(favs), self._bold(mem), self._bold(chapters), self._bold(volumes))
+                except:
+                    o = "{0} ({1} - {2}) - Rating: {3} - Favorited by {4} users - Read by {5} users".format(title, self._bold(anime_type), self._bold(status), self._bold(rating), self._bold(favs), self._bold(mem))
+
+                return o
+
         except Exception, e:
-            self.log.error("_gist: ERROR processing JSON: {0}".format(e))
+            self.log.error("_mal: ERROR processing JSON: {0}".format(e))
             return None
 
     def _yttitle(self, url):
@@ -1097,7 +1200,7 @@ class Titler(callbacks.Plugin):
             self.log.error("_yttitle: ERROR: Could not parse videoid from url: {0}".format(url))
             return None
         # we have video id. lets fetch via gdata.
-        gdataurl =  'http://gdata.youtube.com/feeds/api/videos/%s?alt=jsonc&v=2' % videoid
+        gdataurl =  'https://www.googleapis.com/youtube/v3/videos?id=%s&part=snippet,statistics,contentDetails&key=AIzaSyDGKy6iPRXxG-EkM8XiOqjji4iVhK-UgDo' % videoid
         lookup = self._openurl(gdataurl)
         if not lookup:
             self.log.error("_yttitle: could not fetch: {0}".format(url))
@@ -1105,27 +1208,47 @@ class Titler(callbacks.Plugin):
         # we have our stuff back. try and parse json.
         try:
             data = json.loads(lookup)
+
             # check for errors.
             if 'error' in data:
                 self.log.error("_yttitle: ERROR: {0} trying to fetch {1}".format(data['error']['message'], gdataurl))
                 return None
+
+            if len(data['items']) < 1:
+                self.log.error("_yttitle: ERROR: no returned items for {0}".format(gdataurl))
+                return None
+
+            # data
+            data = data['items'][0]
+
             # no errors. process json.
-            data = data['data']
-            title = data.get('title')
-            category = data.get('category')
-            duration = data.get('duration')
-            if duration:
-                duration = "%dm%ds" % divmod(duration, 60)
-            viewCount = data.get('viewCount')
+            title = data['snippet']['title']
+            viewCount = data['statistics']['viewCount']
+            duration = data['contentDetails']['duration'][2:].lower()
             if viewCount:
                 viewCount = self._numfmt(viewCount)
-            rating = data.get('rating')
-            ytlogo = "{0}{1}".format(self._bold(ircutils.mircColor("You", fg='red', bg='white')), self._bold(ircutils.mircColor("Tube", fg='white', bg='red')))
-            o = "{0} Video: {1} Category: {2} Duration: {3} Views: {4} Rating: {5}".format(ytlogo, title, category, duration, viewCount, rating)
+
+            published = data['snippet']['publishedAt']
+            published = datetime.strptime(published, "%Y-%m-%dT%H:%M:%S.%fZ")
+            agestr = self.__get_age_str(published)
+
+            rating = data['contentDetails'].get('contentRating', None)
+            if rating:
+                rating = rating.get('ytRating', None)
+
+            if rating and rating == 'ytAgeRestricted':
+                agerestricted = " | Age restricted"
+            else:
+                agerestricted = ""
+
+            o = "YouTube: {0} | Views: {1} | Duration: {2} | Published: {3}{4}".format(self._bold(title.encode('utf-8', 'replace')), self._bold(viewCount), self._bold(duration), self._bold(agestr), agerestricted)
             return o
         except Exception, e:
             self.log.error("_yttitle: error processing JSON: {0}".format(e))
             return None
+
+
+
 
 Class = Titler
 
