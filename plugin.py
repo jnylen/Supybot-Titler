@@ -240,7 +240,6 @@ class Titler(callbacks.Plugin):
         try:
             response = requests.get(url, stream=True, headers=h, timeout=5, allow_redirects=True)
 
-            #self.log.info('params: {0}'.format(vars(response.headers)))
             # should we just return text or the actual object.
             #  and int(response.headers.get('content-length')) < 10000000
             if response.headers['Content-Type'].startswith('video/'):
